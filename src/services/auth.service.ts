@@ -1,7 +1,7 @@
 import { generateToken, hashToken } from "../lib/token";
 import { sendEmailVerification } from "../utils/verificationEmail";
 import { TOKEN_EXPIRY } from "../utils/constants";
-import { AppError, AuthError, NotFoundError } from "../errors";
+import { AppError, AuthError, BadRequest, Conflict, NotFoundError } from "../errors";
 import {
   hashPassword,
   comparePassword,
@@ -9,87 +9,70 @@ import {
   generateRefreshToken,
   verifyRefreshToken,
 } from "../utils/auth";
-import { db } from "../db";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
-import { users, userSessions } from "../db/schemas";
-import { tokens } from "../db/schemas/token";
+import { User } from "../models/user.model";
+import { UserSession } from "../models/user-session.model";
+import { Token } from "../models/token.model";
+import { RegisterSchemaDto, LoginSchemaDto } from "../dto/auth.dto";
 
-export async function registerUser(data: {
-  email: string;
-  name: string;
-  password: string;
-}) {
+export async function registerUser(data: RegisterSchemaDto) {
   const { email, name, password } = data;
 
-  const existingUser = await db.query.users.findFirst({
-    where: eq(users.email, email),
-  });
-
+  const existingUser = await User.findOne({ email });
   if (existingUser) {
-    throw new AppError("User with this email already exists", 409);
+    throw new Conflict("User with this email already exists");
   }
 
   const passwordHash = await hashPassword(password);
 
-  const [user] = await db
-    .insert(users)
-    .values({
-      email,
-      name,
-      passwordHash,
-      status: "PENDING_VERIFICATION",
-      isEmailVerified: false,
-    })
-    .returning({
-      id: users.id,
-    });
+  const user = await new User({
+    email,
+    name,
+    passwordHash,
+    status: "PENDING_VERIFICATION",
+    isEmailVerified: false,
+  }).save();
 
   const { rawToken, hashedToken } = generateToken();
 
-  await db.insert(tokens).values({
+  await new Token({
     token: hashedToken,
-    userId: user.id,
+    userId: user._id.toString(),
     type: "EMAIL_VERIFICATION",
     expiresAt: new Date(Date.now() + TOKEN_EXPIRY.EMAIL_VERIFICATION),
-  });
+  }).save();
 
   await sendEmailVerification({ email, token: rawToken });
 
   return {
-    message:
-      "Registration successful. Please check your email to verify your account.",
-    userId: user.id,
+    message: "Registration successful. Please check your email to verify your account.",
+    userId: user._id.toString(),
   };
 }
 
 export async function verifyEmail(token: string) {
   const hashedToken = hashToken(token);
 
-  const tokenDoc = await db.query.tokens.findFirst({
-    where: eq(tokens.token, hashedToken),
-  });
+  const tokenDoc = await Token.findOne({ token: hashedToken });
 
   if (!tokenDoc) {
     throw new NotFoundError("Invalid or expired verification token");
   }
 
   if (tokenDoc.expiresAt < new Date()) {
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, tokenDoc.userId),
-    });
+    const user = await User.findById(tokenDoc.userId);
 
     if (user) {
       if (user.isEmailVerified) {
-        throw new AppError("Email is already verified", 400);
+        throw new BadRequest("Email is already verified");
       }
 
-      const { rawToken, hashedToken } = generateToken();
-      await db.insert(tokens).values({
-        token: hashedToken,
-        userId: user.id,
+      const { rawToken, hashedToken: newHashedToken } = generateToken();
+      await new Token({
+        token: newHashedToken,
+        userId: user._id.toString(),
         type: "EMAIL_VERIFICATION",
         expiresAt: new Date(Date.now() + TOKEN_EXPIRY.EMAIL_VERIFICATION),
-      });
+      }).save();
       await sendEmailVerification({ email: user.email, token: rawToken });
     }
 
@@ -99,38 +82,30 @@ export async function verifyEmail(token: string) {
     );
   }
 
-  const [user] = await db
-    .update(users)
-    .set({
-      isEmailVerified: true,
-      status: "ACTIVE",
-    })
-    .where(eq(users.id, tokenDoc.userId))
-    .returning();
-
+  const user = await User.findById(tokenDoc.userId);
   if (!user) {
     throw new NotFoundError("User not found");
   }
 
-  await db.delete(tokens).where(eq(tokens.id, tokenDoc.id));
+  user.isEmailVerified = true;
+  user.status = "ACTIVE";
+  await user.save();
 
-  return {
-    message: "Email verified successfully. You can now log in.",
-  };
+  await tokenDoc.deleteOne();
+
+  return { message: "Email verified successfully. You can now log in." };
 }
 
-export async function login(data: {
-  email: string;
-  password: string;
-  ipAddress?: string;
-  userAgent?: string;
-  deviceFingerprint?: string;
-}) {
+export async function login(
+  data: LoginSchemaDto & {
+    ipAddress?: string;
+    userAgent?: string;
+    deviceFingerprint?: string;
+  },
+) {
   const { email, password, ipAddress, userAgent, deviceFingerprint } = data;
 
-  const user = await db.query.users.findFirst({
-    where: eq(users.email, email),
-  });
+  const user = await User.findOne({ email }).select("+passwordHash");
   if (!user) {
     throw new AuthError("Invalid email or password");
   }
@@ -143,52 +118,39 @@ export async function login(data: {
     throw new AppError(`Account is ${user.status.toLowerCase()}`, 403);
   }
 
-  if (!user.passwordHash) {
-    throw new AppError("Please complete your account setup", 400);
-  }
-
   const isPasswordValid = await comparePassword(password, user.passwordHash);
-
   if (!isPasswordValid) {
     throw new AuthError("Invalid email or password");
   }
 
-  const [session] = await db
-    .insert(userSessions)
-    .values({
-      userId: user.id,
-      ipAddress,
-      userAgent,
-      deviceFingerprint,
-      expiresAt: new Date(Date.now() + TOKEN_EXPIRY.REFRESH_TOKEN),
-    })
-    .returning({
-      id: userSessions.id,
-    });
+  const session = await new UserSession({
+    userId: user._id.toString(),
+    ipAddress,
+    userAgent,
+    deviceFingerprint,
+    expiresAt: new Date(Date.now() + TOKEN_EXPIRY.REFRESH_TOKEN),
+  }).save();
 
-  const finalAccessToken = generateAccessToken(
-    user.id.toString(),
-    session.id.toString(),
-  );
-  const finalRefreshToken = generateRefreshToken(
-    user.id.toString(),
-    session.id.toString(),
-  );
+  const sessionId = session._id.toString();
+  const userId = user._id.toString();
 
-  await db
-    .update(userSessions)
-    .set({
-      sessionTokenHash: hashToken(finalAccessToken),
-      refreshTokenHash: hashToken(finalRefreshToken),
-    })
-    .where(eq(userSessions.id, session.id));
+  const accessToken = generateAccessToken(userId, sessionId);
+  const refreshToken = generateRefreshToken(userId, sessionId);
+
+  session.sessionTokenHash = hashToken(accessToken);
+  session.refreshTokenHash = hashToken(refreshToken);
+  await session.save();
+
+  user.lastLoginAt = new Date();
+  await user.save();
 
   return {
-    accessToken: finalAccessToken,
-    refreshToken: finalRefreshToken,
+    accessToken,
+    refreshToken,
     user: {
       email: user.email,
       name: user.name,
+      role: user.role,
       status: user.status,
       isEmailVerified: user.isEmailVerified,
     },
@@ -200,15 +162,13 @@ export async function refreshAccessToken(refreshToken: string) {
 
   const refreshTokenHash = hashToken(refreshToken);
 
-  const session = await db.query.userSessions.findFirst({
-    where: and(
-      eq(userSessions.id, parseInt(sessionId, 10)),
-      eq(userSessions.userId, parseInt(userId, 10)),
-      eq(userSessions.refreshTokenHash, refreshTokenHash),
-      eq(userSessions.isActive, true),
-      isNull(userSessions.revokedAt),
-    ),
-  });
+  const session = await UserSession.findOne({
+    _id: sessionId,
+    userId,
+    refreshTokenHash,
+    isActive: true,
+    revokedAt: null,
+  }).select("+refreshTokenHash");
 
   if (!session) {
     throw new AuthError("Invalid or revoked refresh token");
@@ -220,44 +180,35 @@ export async function refreshAccessToken(refreshToken: string) {
 
   const newAccessToken = generateAccessToken(userId, sessionId);
 
-  await db
-    .update(userSessions)
-    .set({
-      sessionTokenHash: hashToken(newAccessToken),
-      lastActivity: new Date(),
-    })
-    .where(eq(userSessions.id, parseInt(sessionId, 10)));
+  session.sessionTokenHash = hashToken(newAccessToken);
+  session.lastActivity = new Date();
+  await session.save();
 
-  return {
-    accessToken: newAccessToken,
-  };
+  return { accessToken: newAccessToken };
 }
 
-export async function logout(sessionId: number) {
-  await db
-    .update(userSessions)
-    .set({
-      isActive: false,
-      revokedAt: new Date(),
-    })
-    .where(eq(userSessions.id, sessionId));
+export async function logout(sessionId: string) {
+  const session = await UserSession.findById(sessionId);
+  if (!session) {
+    throw new NotFoundError("Session not found");
+  }
 
-  return {
-    message: "Logged out successfully",
-  };
+  session.isActive = false;
+  session.revokedAt = new Date();
+  await session.save();
+
+  return { message: "Logged out successfully" };
 }
 
-export async function validateSession(accessToken: string, sessionId: number) {
+export async function validateSession(accessToken: string, sessionId: string) {
   const sessionTokenHash = hashToken(accessToken);
 
-  const session = await db.query.userSessions.findFirst({
-    where: and(
-      eq(userSessions.id, sessionId),
-      eq(userSessions.sessionTokenHash, sessionTokenHash),
-      eq(userSessions.isActive, true),
-      isNull(userSessions.revokedAt),
-    ),
-  });
+  const session = await UserSession.findOne({
+    _id: sessionId,
+    sessionTokenHash,
+    isActive: true,
+    revokedAt: null,
+  }).select("+sessionTokenHash");
 
   if (!session) {
     throw new AuthError("Invalid or revoked session");
@@ -267,12 +218,8 @@ export async function validateSession(accessToken: string, sessionId: number) {
     throw new AuthError("Session has expired");
   }
 
-  await db
-    .update(userSessions)
-    .set({
-      lastActivity: new Date(),
-    })
-    .where(eq(userSessions.id, sessionId));
+  session.lastActivity = new Date();
+  await session.save();
 
   return session;
 }

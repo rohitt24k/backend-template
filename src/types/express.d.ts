@@ -2,11 +2,14 @@ import { Express } from "express-serve-static-core";
 
 declare global {
   namespace Express {
-    interface Request {
+    interface Locals {
       user?: {
-        userId: number;
-        sessionId: number;
+        userId: string;
+        sessionId: string;
       };
+      body?: unknown;
+      query?: unknown;
+      params?: unknown;
     }
   }
 }

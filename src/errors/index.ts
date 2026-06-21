@@ -3,9 +3,7 @@ export class AppError extends Error {
 
   constructor(message: string, statusCode = 500) {
     super(message);
-
     this.statusCode = statusCode;
-
     Error.captureStackTrace(this, this.constructor);
   }
 }
@@ -16,8 +14,8 @@ export class AuthError extends AppError {
   }
 }
 
-export class RequestValidationError extends AppError {
-  constructor(message: string) {
+export class BadRequest extends AppError {
+  constructor(message: string = "Bad request") {
     super(message, 400);
   }
 }
@@ -31,5 +29,17 @@ export class NotFoundError extends AppError {
 export class ForbiddenError extends AppError {
   constructor(message: string = "Forbidden") {
     super(message, 403);
+  }
+}
+
+export class Conflict extends AppError {
+  constructor(message: string = "Conflict") {
+    super(message, 409);
+  }
+}
+
+export class RequestValidationError extends AppError {
+  constructor(message: string) {
+    super(message, 400);
   }
 }

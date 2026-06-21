@@ -1,67 +1,77 @@
-import { type Request, type Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
-import { GenerateResponse } from "../utils/generateResponse";
+import { RequestHandler } from "express";
+import { GenerateResponse } from "../utils/response.creator";
 import * as authService from "../services/auth.service";
 import { AuthError } from "../errors";
+import {
+  RegisterSchemaDto,
+  LoginSchemaDto,
+  VerifyEmailSchemaDto,
+  RefreshTokenSchemaDto,
+} from "../dto/auth.dto";
 
-export const Register = asyncHandler(async (req: Request, res: Response) => {
-  const { email, name, password } = req.body;
+export const AuthController = {
+  Register: (async (req, res, next) => {
+    try {
+      const body = res.locals.body as RegisterSchemaDto;
+      const result = await authService.registerUser(body);
+      GenerateResponse(res, 201, result, result.message);
+    } catch (err) {
+      next(err);
+    }
+  }) as RequestHandler,
 
-  const result = await authService.registerUser({ email, name, password });
+  VerifyEmail: (async (req, res, next) => {
+    try {
+      const body = res.locals.body as VerifyEmailSchemaDto;
+      const result = await authService.verifyEmail(body.token);
+      GenerateResponse(res, 200, result, result.message);
+    } catch (err) {
+      next(err);
+    }
+  }) as RequestHandler,
 
-  return GenerateResponse(res, 201, result, result.message);
-});
+  Login: (async (req, res, next) => {
+    try {
+      const body = res.locals.body as LoginSchemaDto;
+      const ipAddress =
+        (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress;
+      const userAgent = req.headers["user-agent"];
+      const deviceFingerprint = req.headers["x-device-fingerprint"] as string;
 
-export const VerifyEmail = asyncHandler(async (req: Request, res: Response) => {
-  const { token } = req.body;
+      const result = await authService.login({
+        ...body,
+        ipAddress,
+        userAgent,
+        deviceFingerprint,
+      });
+      GenerateResponse(res, 200, result, "Login successful");
+    } catch (err) {
+      next(err);
+    }
+  }) as RequestHandler,
 
-  const result = await authService.verifyEmail(token);
+  RefreshToken: (async (req, res, next) => {
+    try {
+      const body = res.locals.body as RefreshTokenSchemaDto;
+      const result = await authService.refreshAccessToken(body.refreshToken);
+      GenerateResponse(res, 200, result, "Access token refreshed successfully");
+    } catch (err) {
+      next(err);
+    }
+  }) as RequestHandler,
 
-  return GenerateResponse(res, 200, result, result.message);
-});
+  Logout: (async (req, res, next) => {
+    try {
+      const { sessionId } = res.locals.user as { userId: string; sessionId: string };
 
-export const Login = asyncHandler(async (req: Request, res: Response) => {
-  const { email, password } = req.body;
+      if (!sessionId) {
+        throw new AuthError("Session not found");
+      }
 
-  const ipAddress =
-    (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress;
-  const userAgent = req.headers["user-agent"];
-  const deviceFingerprint = req.headers["x-device-fingerprint"] as string;
-
-  const result = await authService.login({
-    email,
-    password,
-    ipAddress,
-    userAgent,
-    deviceFingerprint,
-  });
-
-  return GenerateResponse(res, 200, result, "Login successful");
-});
-
-export const RefreshToken = asyncHandler(
-  async (req: Request, res: Response) => {
-    const { refreshToken } = req.body;
-
-    const result = await authService.refreshAccessToken(refreshToken);
-
-    return GenerateResponse(
-      res,
-      200,
-      result,
-      "Access token refreshed successfully",
-    );
-  },
-);
-
-export const Logout = asyncHandler(async (req: Request, res: Response) => {
-  const sessionId = req.user?.sessionId;
-
-  if (!sessionId) {
-    throw new AuthError("Session not found");
-  }
-
-  const result = await authService.logout(sessionId);
-
-  return GenerateResponse(res, 200, result, result.message);
-});
+      const result = await authService.logout(sessionId);
+      GenerateResponse(res, 200, result, result.message);
+    } catch (err) {
+      next(err);
+    }
+  }) as RequestHandler,
+};

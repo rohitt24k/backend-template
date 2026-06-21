@@ -1,27 +1,43 @@
-import express from "express";
+import { Router } from "express";
+import { AuthenticationMiddleware } from "../middlewares/authentication.middleware";
+import { zodMiddleware } from "../middlewares/zod.middleware";
+import { AuthController } from "../controllers/auth.controller";
 import {
-  Register,
-  VerifyEmail,
-  Login,
-  RefreshToken,
-  Logout,
-} from "../controllers/auth.controller";
-import { authenticate } from "../middleware/authentication.middleware";
-import { validate } from "../middleware/validation.middleware";
-import {
-  registerSchema,
-  verifyEmailSchema,
-  loginSchema,
-  refreshTokenSchema,
-} from "../validation/auth.validation";
+  RegisterSchema,
+  LoginSchema,
+  VerifyEmailSchema,
+  RefreshTokenSchema,
+} from "../schemas/auth.schema";
 
-const AuthRouter = express.Router();
+export const AuthRouter = Router();
 
-AuthRouter.post("/register", validate(registerSchema), Register);
-AuthRouter.post("/verify-email", validate(verifyEmailSchema), VerifyEmail);
-AuthRouter.post("/login", validate(loginSchema), Login);
-AuthRouter.post("/refresh-token", validate(refreshTokenSchema), RefreshToken);
+// Public: register new user
+AuthRouter.post(
+  "/register",
+  zodMiddleware({ body: RegisterSchema }),
+  AuthController.Register,
+);
 
-AuthRouter.post("/logout", authenticate, Logout);
+// Public: verify email with token
+AuthRouter.post(
+  "/verify-email",
+  zodMiddleware({ body: VerifyEmailSchema }),
+  AuthController.VerifyEmail,
+);
 
-export { AuthRouter };
+// Public: login
+AuthRouter.post(
+  "/login",
+  zodMiddleware({ body: LoginSchema }),
+  AuthController.Login,
+);
+
+// Public: refresh access token
+AuthRouter.post(
+  "/refresh-token",
+  zodMiddleware({ body: RefreshTokenSchema }),
+  AuthController.RefreshToken,
+);
+
+// Authenticated: logout
+AuthRouter.post("/logout", AuthenticationMiddleware, AuthController.Logout);

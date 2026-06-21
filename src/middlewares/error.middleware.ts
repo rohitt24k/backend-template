@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { GenerateResponse } from "../utils/generateResponse";
+import { GenerateResponse } from "../utils/response.creator";
 import { AppError } from "../errors";
 import mongoose from "mongoose";
 
@@ -7,13 +7,11 @@ export function errorHandler(
   err: unknown,
   req: Request,
   res: Response,
-  _next: NextFunction
+  _next: NextFunction,
 ) {
-  // Default values
   let statusCode = 500;
   let message = "Internal server error";
 
-  // Known operational error
   if (err instanceof AppError) {
     statusCode = err.statusCode;
     message = err.message;
@@ -31,9 +29,8 @@ export function errorHandler(
     message = `Duplicate value for field(s): ${fields}`;
   }
 
-  // Log non-operational errors
   if (!(err instanceof AppError)) {
-    console.error("🔥 Unexpected Error:", err);
+    console.error("Unexpected Error:", err);
   }
 
   return GenerateResponse(res, statusCode, null, message);

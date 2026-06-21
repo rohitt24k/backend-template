@@ -1,12 +1,9 @@
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
 import { AuthError } from "../errors";
-import { validateSession } from "../services/auth.service";
 import { verifyAccessToken } from "../utils/auth";
+import { validateSession } from "../services/auth.service";
 
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
-
-export async function authenticate(
+export async function AuthenticationMiddleware(
   req: Request,
   res: Response,
   next: NextFunction,
@@ -20,9 +17,7 @@ export async function authenticate(
 
     const token = authHeader.substring(7);
 
-    const decoded = verifyAccessToken(token);
-
-    const { userId, sessionId } = decoded;
+    const { userId, sessionId } = verifyAccessToken(token);
 
     if (!userId || !sessionId) {
       throw new AuthError("Invalid token payload");
@@ -30,7 +25,7 @@ export async function authenticate(
 
     await validateSession(token, sessionId);
 
-    req.user = { userId, sessionId };
+    res.locals.user = { userId, sessionId };
 
     next();
   } catch (error) {
